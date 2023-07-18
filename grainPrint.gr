@@ -3,13 +3,6 @@ module GrainPrint
 // Some Code Related to Getting Types is taken from here:
 // https://github.com/grain-lang/grain/blob/main/stdlib/runtime/string.gr
 // Includes
-// TODO: Remove stdlib dependencies and pervasives dependencies
-// TODO: Switch over to a printTree
-// TODO: Move Identification Logic To A Separate Package
-// TODO: Catch Cycles
-// TODO: Add Option For RainBox Brackets
-// TODO: Ensure zero mem leaks
-// TODO: This feels really messy
 include "runtime/dataStructures"
 from DataStructures use {
   tagChar,
@@ -61,6 +54,7 @@ provide record PrintSettings {
   newLineChar: String,
   printSuffix: Bool,
   byteLimit: Number,
+  rainbowBracket: Bool,
   // NewLines
   forceNewLine: Bool,
   newLineList: Option<Number>,
@@ -69,6 +63,7 @@ provide record PrintSettings {
   newLineTuple: Option<Number>,
 }
 // Settings
+let defaultRainBowColorList = [> (255, 214, 2), (218, 112, 214), (22, 159, 255)]
 let defaultPrintColors = {
   numberColor: (255, 133, 15),
   stringColor: (204, 0, 0),
@@ -92,6 +87,7 @@ let defaultSettings = {
   printSuffix: true,
   byteLimit: 32,
   forceNewLine: false,
+  rainbowBracket: false,
   newLineList: Some(200),
   newLineArray: Some(200),
   newLineRecord: Some(200),
@@ -189,6 +185,13 @@ let writeIndent = (depth, printBuf, printSettings) => {
 let writeNewLine = (printBuf, printSettings) => {
   // Write String
   Buffer.addString(printSettings.newLineChar, printBuf.data)
+}
+let writeBracket = (bracket, printBuf, printSettings, color) => {
+  if (printSettings.rainbowBracket) {
+    // Write Color
+    writeColor(printBuf, printSettings, color)
+  }
+  Buffer.addChar(bracket, printBuf.data)
 }
 let printBufToString = (printBuf, settings) => {
   // Write The Output
@@ -380,7 +383,14 @@ let isUInt16 = a => {
     Tags._GRAIN_UINT16_TAG_MASK
 }
 // Stringify Functions
-let stringifyUnknown = (unknownMsg: String, depth, printBuf, printSettings) => {
+let incrBracketColor = bracketColor => {
+  let mut bracketColor = bracketColor + 1
+  if (bracketColor >= Array.length(defaultRainBowColorList)) {
+    bracketColor = 0
+  }
+  bracketColor
+}
+let stringifyUnknown = (unknownMsg: String, printBuf, printSettings) => {
   writeChar('<', printBuf, printSettings, defaultPrintColors.unknownColor)
   writeString(
     unknownMsg,
@@ -391,26 +401,26 @@ let stringifyUnknown = (unknownMsg: String, depth, printBuf, printSettings) => {
   writeChar('>', printBuf, printSettings, defaultPrintColors.unknownColor)
 }
 
-let stringifyBool = (bool: Bool, depth, printBuf, printSettings) => {
+let stringifyBool = (bool: Bool, printBuf, printSettings) => {
   if (bool) {
     writeString("true", printBuf, printSettings, defaultPrintColors.trueColor)
   } else {
     writeString("false", printBuf, printSettings, defaultPrintColors.falseColor)
   }
 }
-let stringifyVoid = (depth, printBuf, printSettings) =>
+let stringifyVoid = (printBuf, printSettings) =>
   writeString("void", printBuf, printSettings, defaultPrintColors.voidColor)
 @unsafe
-let stringifyConstantValue = (const, depth, printBuf, printSettings) => {
+let stringifyConstantValue = (const, printBuf, printSettings) => {
   from WasmI32 use { (==) }
   match (WasmI32.fromGrain(const)) {
     t when t == WasmI32.fromGrain(true) =>
-      stringifyBool(magic(const): Bool, depth, printBuf, printSettings),
+      stringifyBool(magic(const): Bool, printBuf, printSettings),
     t when t == WasmI32.fromGrain(false) =>
-      stringifyBool(magic(const): Bool, depth, printBuf, printSettings),
+      stringifyBool(magic(const): Bool, printBuf, printSettings),
     t when t == WasmI32.fromGrain(void) =>
-      stringifyVoid(depth, printBuf, printSettings),
-    _ => stringifyUnknown("unknown constant", depth, printBuf, printSettings),
+      stringifyVoid(printBuf, printSettings),
+    _ => stringifyUnknown("unknown constant", printBuf, printSettings),
   }
 }
 
@@ -425,7 +435,7 @@ let stringifyChar = (char: Char, depth, printBuf, printSettings) => {
   )
 }
 @unsafe
-let stringifyInt8 = (int8: Int8, depth, printBuf, printSettings) => {
+let stringifyInt8 = (int8: Int8, printBuf, printSettings) => {
   // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
   let val = WasmI32.fromGrain(int8) >> 8n
@@ -435,7 +445,7 @@ let stringifyInt8 = (int8: Int8, depth, printBuf, printSettings) => {
     writeString("s", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyInt16 = (int16: Int16, depth, printBuf, printSettings) => {
+let stringifyInt16 = (int16: Int16, printBuf, printSettings) => {
   // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
   let val = WasmI32.fromGrain(int16) >> 8n
@@ -445,7 +455,7 @@ let stringifyInt16 = (int16: Int16, depth, printBuf, printSettings) => {
     writeString("S", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyUInt8 = (uint8: Uint8, depth, printBuf, printSettings) => {
+let stringifyUInt8 = (uint8: Uint8, printBuf, printSettings) => {
   // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
   let val = WasmI32.fromGrain(uint8) >> 8n
@@ -455,7 +465,7 @@ let stringifyUInt8 = (uint8: Uint8, depth, printBuf, printSettings) => {
     writeString("us", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyUInt16 = (uint16: Uint16, depth, printBuf, printSettings) => {
+let stringifyUInt16 = (uint16: Uint16, printBuf, printSettings) => {
   // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
   let val = WasmI32.fromGrain(uint16) >> 8n
@@ -470,20 +480,19 @@ let stringifyShortValue = (short, depth, printBuf, printSettings) => {
     t when isChar(t) =>
       stringifyChar(magic(short): Char, depth, printBuf, printSettings),
     t when isInt8(t) =>
-      stringifyInt8(magic(short): Int8, depth, printBuf, printSettings),
+      stringifyInt8(magic(short): Int8, printBuf, printSettings),
     t when isInt16(t) =>
-      stringifyInt16(magic(short): Int16, depth, printBuf, printSettings),
+      stringifyInt16(magic(short): Int16, printBuf, printSettings),
     t when isUInt8(t) =>
-      stringifyUInt8(magic(short): Uint8, depth, printBuf, printSettings),
+      stringifyUInt8(magic(short): Uint8, printBuf, printSettings),
     t when isUInt16(t) =>
-      stringifyUInt16(magic(short): Uint16, depth, printBuf, printSettings),
-    _ =>
-      stringifyUnknown("unknown short value", depth, printBuf, printSettings),
+      stringifyUInt16(magic(short): Uint16, printBuf, printSettings),
+    _ => stringifyUnknown("unknown short value", printBuf, printSettings),
   }
 }
 
 @unsafe
-let stringifyNumber = (num: Number, depth, printBuf, printSettings) => {
+let stringifyNumber = (num: Number, printBuf, printSettings) => {
   // TODO: Support Hex Printing
   from WasmI32 use { (>>), (==) }
   // Check If Simple Number
@@ -540,7 +549,7 @@ let stringifyNumber = (num: Number, depth, printBuf, printSettings) => {
           defaultPrintColors.numberColor
         )
       },
-      _ => stringifyUnknown("unknown number", depth, printBuf, printSettings),
+      _ => stringifyUnknown("unknown number", printBuf, printSettings),
     }
   }
 }
@@ -554,7 +563,7 @@ let stringifyString = (str: String, depth, printBuf, printSettings) => {
     defaultPrintColors.stringColor
   )
 }
-let stringifyLambda = (lambda, depth, printBuf, printSettings) => {
+let stringifyLambda = (lambda, printBuf, printSettings) => {
   writeString(
     "<lambda>",
     printBuf,
@@ -563,7 +572,7 @@ let stringifyLambda = (lambda, depth, printBuf, printSettings) => {
   )
 }
 @unsafe
-let stringifyBytes = (bytes: Bytes, depth, printBuf, printSettings) => {
+let stringifyBytes = (bytes: Bytes, printBuf, printSettings) => {
   from WasmI32 use { (>>) }
   writeString(
     "<bytes: ",
@@ -588,7 +597,7 @@ let stringifyBytes = (bytes: Bytes, depth, printBuf, printSettings) => {
   writeString(">", printBuf, printSettings, defaultPrintColors.bytesColor)
 }
 @unsafe
-let stringifyInt32 = (int32: Int32, depth, printBuf, printSettings) => {
+let stringifyInt32 = (int32: Int32, printBuf, printSettings) => {
   let ptr = WasmI32.fromGrain(int32)
   let val = NumberUtils.itoa32(WasmI32.load(ptr, 4n), 10n)
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
@@ -596,7 +605,7 @@ let stringifyInt32 = (int32: Int32, depth, printBuf, printSettings) => {
     writeString("l", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyUInt32 = (uint32: Uint32, depth, printBuf, printSettings) => {
+let stringifyUInt32 = (uint32: Uint32, printBuf, printSettings) => {
   let ptr = WasmI32.fromGrain(uint32)
   let val = NumberUtils.utoa32(WasmI32.load(ptr, 4n), 10n)
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
@@ -604,7 +613,7 @@ let stringifyUInt32 = (uint32: Uint32, depth, printBuf, printSettings) => {
     writeString("ul", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyFloat32 = (float32: Float32, depth, printBuf, printSettings) => {
+let stringifyFloat32 = (float32: Float32, printBuf, printSettings) => {
   let ptr = WasmI32.fromGrain(float32)
   let val = NumberUtils.dtoa(WasmF64.promoteF32(WasmF32.load(ptr, 4n)))
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
@@ -612,7 +621,7 @@ let stringifyFloat32 = (float32: Float32, depth, printBuf, printSettings) => {
     writeString("f", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyInt64 = (int64: Int64, depth, printBuf, printSettings) => {
+let stringifyInt64 = (int64: Int64, printBuf, printSettings) => {
   let ptr = WasmI32.fromGrain(int64)
   let val = NumberUtils.itoa64(WasmI64.load(ptr, 8n), 10n)
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
@@ -620,7 +629,7 @@ let stringifyInt64 = (int64: Int64, depth, printBuf, printSettings) => {
     writeString("L", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let stringifyUInt64 = (uint64: Uint64, depth, printBuf, printSettings) => {
+let stringifyUInt64 = (uint64: Uint64, printBuf, printSettings) => {
   let ptr = WasmI32.fromGrain(uint64)
   let val = NumberUtils.utoa64(WasmI64.load(ptr, 8n), 10n)
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
@@ -633,6 +642,7 @@ let rec stringifyTupleHelp =
     tupValues,
     addNewLines,
     depth,
+    bracketColor,
     printBuf,
     printSettings,
     allowBox=true,
@@ -640,12 +650,21 @@ let rec stringifyTupleHelp =
   // Write Start
   if (List.length(tupValues) == 1 && allowBox)
     writeString("box", printBuf, printSettings, defaultPrintColors.boxColor)
-  writeChar('(', printBuf, printSettings, defaultPrintColors.defaultColor)
+  let bracketCol = defaultRainBowColorList[bracketColor]
+  let bracketColor = incrBracketColor(bracketColor)
+  writeBracket('(', printBuf, printSettings, bracketCol)
   if (addNewLines) writeNewLine(printBuf, printSettings)
   // Write Contents
   let len = List.length(tupValues)
   List.forEachi((e, i) => {
-    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    stringifyItem(
+      e,
+      depth + 1,
+      bracketColor,
+      addNewLines,
+      printBuf,
+      printSettings
+    )
     if (i < len - 1) {
       writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
       writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
@@ -654,9 +673,9 @@ let rec stringifyTupleHelp =
   }, tupValues)
   // Write Ending
   if (addNewLines) writeIndent(depth, printBuf, printSettings)
-  writeChar(')', printBuf, printSettings, defaultPrintColors.defaultColor)
+  writeBracket(')', printBuf, printSettings, bracketCol)
 }
-and stringifyTuple = (tup, depth, printBuf, printSettings) => {
+and stringifyTuple = (tup, depth, bracketColor, printBuf, printSettings) => {
   from WasmI32 use { (==), (<), (*), (-), (+) }
   let ptr = WasmI32.fromGrain(tup)
   let tupleLength = WasmI32.load(ptr, 4n)
@@ -676,15 +695,36 @@ and stringifyTuple = (tup, depth, printBuf, printSettings) => {
       // Calculate Length
       let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
       let fakeSettings = { ...printSettings, colored: false }
-      stringifyTupleHelp(fields, false, depth, fakePrintBuf, fakeSettings)
+      stringifyTupleHelp(
+        fields,
+        false,
+        depth,
+        bracketColor,
+        fakePrintBuf,
+        fakeSettings
+      )
       String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
     },
     None => false,
   }
   // Stringify Items
-  stringifyTupleHelp(fields, addNewLines, depth, printBuf, printSettings)
+  stringifyTupleHelp(
+    fields,
+    addNewLines,
+    depth,
+    bracketColor,
+    printBuf,
+    printSettings
+  )
 }
-and stringifyList = (list: List<a>, depth, printBuf, printSettings) => {
+and stringifyList =
+  (
+    list: List<a>,
+    depth,
+    bracketColor,
+    printBuf,
+    printSettings,
+  ) => {
   let addNewLines = match (printSettings.newLineList) {
     _ when printSettings.forceNewLine => true,
     Some(n) => {
@@ -692,18 +732,34 @@ and stringifyList = (list: List<a>, depth, printBuf, printSettings) => {
       let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
       let fakeSettings = { ...printSettings, colored: false }
       List.forEachi((e, i) => {
-        stringifyItem(e, depth + 1, false, fakePrintBuf, fakeSettings)
+        stringifyItem(
+          e,
+          depth + 1,
+          bracketColor,
+          false,
+          fakePrintBuf,
+          fakeSettings
+        )
       }, list)
       String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
     },
     None => false,
   }
   // Write Array Open
-  writeString("[", printBuf, printSettings, defaultPrintColors.defaultColor)
+  let bracketCol = defaultRainBowColorList[bracketColor]
+  let bracketColor = incrBracketColor(bracketColor)
+  writeBracket('[', printBuf, printSettings, bracketCol)
   if (addNewLines) writeNewLine(printBuf, printSettings)
   // Write Array Items
   List.forEachi((e, i) => {
-    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    stringifyItem(
+      e,
+      depth + 1,
+      bracketColor,
+      addNewLines,
+      printBuf,
+      printSettings
+    )
     if (i < List.length(list) - 1) {
       writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
       writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
@@ -712,9 +768,16 @@ and stringifyList = (list: List<a>, depth, printBuf, printSettings) => {
   }, list)
   // Write Array Close
   if (addNewLines) writeIndent(depth, printBuf, printSettings)
-  writeString("]", printBuf, printSettings, defaultPrintColors.defaultColor)
+  writeBracket(']', printBuf, printSettings, bracketCol)
 }
-and stringifyArray = (arr: Array<a>, depth, printBuf, printSettings) => {
+and stringifyArray =
+  (
+    arr: Array<a>,
+    depth,
+    bracketColor,
+    printBuf,
+    printSettings,
+  ) => {
   let addNewLines = match (printSettings.newLineArray) {
     _ when printSettings.forceNewLine => true,
     Some(n) => {
@@ -722,7 +785,14 @@ and stringifyArray = (arr: Array<a>, depth, printBuf, printSettings) => {
       let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
       let fakeSettings = { ...printSettings, colored: false }
       Array.forEachi((e, i) => {
-        stringifyItem(e, depth + 1, false, fakePrintBuf, fakeSettings)
+        stringifyItem(
+          e,
+          depth + 1,
+          bracketColor,
+          false,
+          fakePrintBuf,
+          fakeSettings
+        )
         if (i < Array.length(arr) - 1) {
           writeChar(
             ',',
@@ -743,11 +813,21 @@ and stringifyArray = (arr: Array<a>, depth, printBuf, printSettings) => {
     None => false,
   }
   // Write Array Open
-  writeString("[>", printBuf, printSettings, defaultPrintColors.defaultColor)
+  let bracketCol = defaultRainBowColorList[bracketColor]
+  let bracketColor = incrBracketColor(bracketColor)
+  writeBracket('[', printBuf, printSettings, bracketCol)
+  writeChar('>', printBuf, printSettings, defaultPrintColors.defaultColor)
   if (addNewLines) writeNewLine(printBuf, printSettings)
   // Write Array Items
   Array.forEachi((e, i) => {
-    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    stringifyItem(
+      e,
+      depth + 1,
+      bracketColor,
+      addNewLines,
+      printBuf,
+      printSettings
+    )
     if (i < Array.length(arr) - 1) {
       writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
       writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
@@ -756,9 +836,17 @@ and stringifyArray = (arr: Array<a>, depth, printBuf, printSettings) => {
   }, arr)
   // Write Array Close
   if (addNewLines) writeIndent(depth, printBuf, printSettings)
-  writeString("]", printBuf, printSettings, defaultPrintColors.defaultColor)
+  writeBracket(']', printBuf, printSettings, bracketCol)
 }
-and tupleAdtHelp = (ptr, variantName, depth, printBuf, printSettings) => {
+and tupleAdtHelp =
+  (
+    ptr,
+    variantName,
+    depth,
+    bracketColor,
+    printBuf,
+    printSettings,
+  ) => {
   from WasmI32 use { (==), (>), (*), (-), (>=), (+) }
   let variantArity = WasmI32.load(ptr, 16n)
   // Write Name
@@ -786,6 +874,7 @@ and tupleAdtHelp = (ptr, variantName, depth, printBuf, printSettings) => {
           values,
           false,
           depth,
+          bracketColor,
           fakePrintBuf,
           fakeSettings,
           allowBox=false
@@ -799,16 +888,14 @@ and tupleAdtHelp = (ptr, variantName, depth, printBuf, printSettings) => {
       values,
       addNewLines,
       depth,
+      bracketColor,
       printBuf,
       printSettings,
       allowBox=false
     )
   }
 }
-and recordAdtHelp = (ptr, name, depth, printBuf, printSettings) => {
-  void
-}
-and stringifyAdt = (adt, depth, printBuf, printSettings) => {
+and stringifyAdt = (adt, depth, bracketColor, printBuf, printSettings) => {
   from WasmI32 use { (!=) }
   let ptr = WasmI32.fromGrain(adt)
   let builtinVariantName = getBuiltinVariantName(ptr)
@@ -819,11 +906,12 @@ and stringifyAdt = (adt, depth, printBuf, printSettings) => {
       ptr,
       WasmI32.toGrain(builtinVariantName),
       depth,
+      bracketColor,
       printBuf,
       printSettings
     )
   } else if (isListVariant(ptr)) {
-    stringifyList(magic(adt), depth, printBuf, printSettings)
+    stringifyList(magic(adt), depth, bracketColor, printBuf, printSettings)
   } else {
     let variantPtr = getVariantMetadata(ptr)
     from WasmI32 use { (==), (+) }
@@ -870,6 +958,7 @@ and stringifyAdt = (adt, depth, printBuf, printSettings) => {
               fields,
               Array.fromList(values),
               depth,
+              bracketColor,
               false,
               fakePrintBuf,
               fakeSettings
@@ -889,12 +978,20 @@ and stringifyAdt = (adt, depth, printBuf, printSettings) => {
           fields,
           Array.fromList(values),
           depth,
+          bracketColor,
           addNewLines,
           printBuf,
           printSettings
         )
       } else {
-        tupleAdtHelp(ptr, variantName, depth, printBuf, printSettings)
+        tupleAdtHelp(
+          ptr,
+          variantName,
+          depth,
+          bracketColor,
+          printBuf,
+          printSettings
+        )
       }
     }
   }
@@ -904,12 +1001,15 @@ and stringifyRecordHelp =
     fields: Array<String>,
     values: Array<a>,
     depth,
+    bracketColor,
     splitLines,
     printBuf,
     printSettings,
   ) => {
   // Write Open
-  writeString("{", printBuf, printSettings, defaultPrintColors.defaultColor)
+  let bracketCol = defaultRainBowColorList[bracketColor]
+  let bracketColor = incrBracketColor(bracketColor)
+  writeBracket('{', printBuf, printSettings, bracketCol)
   writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
   if (splitLines) writeNewLine(printBuf, printSettings)
   // Write Contents
@@ -923,7 +1023,14 @@ and stringifyRecordHelp =
     writeString(field, printBuf, printSettings, defaultPrintColors.keyColor)
     writeChar(':', printBuf, printSettings, defaultPrintColors.defaultColor)
     writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
-    stringifyItem(value, depth + 1, false, printBuf, printSettings)
+    stringifyItem(
+      value,
+      depth + 1,
+      bracketColor,
+      false,
+      printBuf,
+      printSettings
+    )
     // Write Comma
     if (i < Array.length(fields) - 1)
       writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
@@ -932,9 +1039,9 @@ and stringifyRecordHelp =
     if (splitLines) writeNewLine(printBuf, printSettings)
   }
   // Write Close
-  writeString("}", printBuf, printSettings, defaultPrintColors.defaultColor)
+  writeBracket('}', printBuf, printSettings, bracketCol)
 }
-and stringifyRecord = (item, depth, printBuf, printSettings) => {
+and stringifyRecord = (item, depth, bracketColor, printBuf, printSettings) => {
   from WasmI32 use { (==) }
   let ptr = WasmI32.fromGrain(item)
   let recordArity = WasmI32.load(ptr, 12n)
@@ -971,6 +1078,7 @@ and stringifyRecord = (item, depth, printBuf, printSettings) => {
           fields,
           Array.fromList(values),
           depth,
+          bracketColor,
           false,
           fakePrintBuf,
           fakeSettings
@@ -984,13 +1092,21 @@ and stringifyRecord = (item, depth, printBuf, printSettings) => {
       fields,
       Array.fromList(values),
       depth,
+      bracketColor,
       addNewLines,
       printBuf,
       printSettings
     )
   }
 }
-and stringifyHeapValue = (item, depth, printBuf, printSettings) => {
+and stringifyHeapValue =
+  (
+    item,
+    depth,
+    bracketColor,
+    printBuf,
+    printSettings,
+  ) => {
   from WasmI32 use { (==) }
   let ptr = WasmI32.fromGrain(item)
   let tag = WasmI32.load(ptr, 0n)
@@ -998,31 +1114,45 @@ and stringifyHeapValue = (item, depth, printBuf, printSettings) => {
     t when t == Tags._GRAIN_STRING_HEAP_TAG =>
       stringifyString(magic(item): String, depth, printBuf, printSettings),
     t when t == Tags._GRAIN_ADT_HEAP_TAG =>
-      stringifyAdt(item, depth, printBuf, printSettings),
+      stringifyAdt(item, depth, bracketColor, printBuf, printSettings),
     t when t == Tags._GRAIN_RECORD_HEAP_TAG =>
-      stringifyRecord(item, depth, printBuf, printSettings),
+      stringifyRecord(item, depth, bracketColor, printBuf, printSettings),
     t when t == Tags._GRAIN_ARRAY_HEAP_TAG =>
-      stringifyArray(magic(item): Array<a>, depth, printBuf, printSettings),
+      stringifyArray(
+        magic(item): Array<a>,
+        depth,
+        bracketColor,
+        printBuf,
+        printSettings
+      ),
     t when t == Tags._GRAIN_BOXED_NUM_HEAP_TAG =>
-      stringifyNumber(magic(item): Number, depth, printBuf, printSettings),
+      stringifyNumber(magic(item): Number, printBuf, printSettings),
     t when t == Tags._GRAIN_LAMBDA_HEAP_TAG =>
-      stringifyLambda(item, depth, printBuf, printSettings),
+      stringifyLambda(item, printBuf, printSettings),
     t when t == Tags._GRAIN_TUPLE_HEAP_TAG =>
-      stringifyTuple(item, depth, printBuf, printSettings),
+      stringifyTuple(item, depth, bracketColor, printBuf, printSettings),
     t when t == Tags._GRAIN_BYTES_HEAP_TAG =>
-      stringifyBytes(magic(item): Bytes, depth, printBuf, printSettings),
+      stringifyBytes(magic(item): Bytes, printBuf, printSettings),
     t when t == Tags._GRAIN_INT32_HEAP_TAG =>
-      stringifyInt32(magic(item): Int32, depth, printBuf, printSettings),
+      stringifyInt32(magic(item): Int32, printBuf, printSettings),
     t when t == Tags._GRAIN_FLOAT32_HEAP_TAG =>
-      stringifyFloat32(magic(item): Float32, depth, printBuf, printSettings),
+      stringifyFloat32(magic(item): Float32, printBuf, printSettings),
     t when t == Tags._GRAIN_UINT32_HEAP_TAG =>
-      stringifyUInt32(magic(item): Uint32, depth, printBuf, printSettings),
+      stringifyUInt32(magic(item): Uint32, printBuf, printSettings),
     t when t == Tags._GRAIN_UINT64_HEAP_TAG =>
-      stringifyUInt64(magic(item): Uint64, depth, printBuf, printSettings),
-    _ => stringifyUnknown("unknown heap value", depth, printBuf, printSettings),
+      stringifyUInt64(magic(item): Uint64, printBuf, printSettings),
+    _ => stringifyUnknown("unknown heap value", printBuf, printSettings),
   }
 }
-and stringifyItem = (item, depth, lastNewLine, printBuf, printSettings) => {
+and stringifyItem =
+  (
+    item,
+    depth,
+    bracketColor,
+    lastNewLine,
+    printBuf,
+    printSettings,
+  ) => {
   if (lastNewLine) writeIndent(depth, printBuf, printSettings)
   // Match The Item
   match (item) {
@@ -1036,22 +1166,22 @@ and stringifyItem = (item, depth, lastNewLine, printBuf, printSettings) => {
     },
     // Determine The Stack Type
     t when isSimpleNumber(t) =>
-      stringifyNumber(magic(t): Number, depth, printBuf, printSettings),
+      stringifyNumber(magic(t): Number, printBuf, printSettings),
     t when isPointer(t) =>
-      stringifyHeapValue(t, depth, printBuf, printSettings),
+      stringifyHeapValue(t, depth, bracketColor, printBuf, printSettings),
     t when isConstantValue(t) =>
-      stringifyConstantValue(t, depth, printBuf, printSettings),
+      stringifyConstantValue(t, printBuf, printSettings),
     t when isShortValue(t) =>
       stringifyShortValue(t, depth, printBuf, printSettings),
     // Must Be Unknown
-    _ => stringifyUnknown("unknown value", depth, printBuf, printSettings),
+    _ => stringifyUnknown("unknown value", printBuf, printSettings),
   }
 }
 let stringify = (item, printSettings) => {
   // Create Print Buffer
   let printBuffer = { data: Buffer.make(0), currentColor: (-1, -1, -1) }
   // Stringify Item
-  stringifyItem(item, 0, false, printBuffer, printSettings)
+  stringifyItem(item, 0, 0, false, printBuffer, printSettings)
   // Return String
   printBufToString(printBuffer, printSettings)
 }
