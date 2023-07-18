@@ -1,0 +1,1057 @@
+module GrainPrint
+
+// Some Code Related to Getting Types is taken from here:
+// https://github.com/grain-lang/grain/blob/main/stdlib/runtime/string.gr
+// Includes
+// TODO: Remove stdlib dependencies and pervasives dependencies
+// TODO: Switch over to a printTree
+// TODO: Move Identification Logic To A Separate Package
+// TODO: Catch Cycles
+// TODO: Add Option For RainBox Brackets
+// TODO: Ensure zero mem leaks
+// TODO: This feels really messy
+include "runtime/dataStructures"
+from DataStructures use {
+  tagChar,
+  allocateString,
+  allocateArray,
+  untagSimpleNumber,
+}
+include "runtime/numberUtils"
+include "runtime/unsafe/tags"
+include "runtime/unsafe/wasmi32"
+include "runtime/unsafe/wasmi64"
+include "runtime/unsafe/wasmf32"
+include "runtime/unsafe/wasmf64"
+include "runtime/unsafe/memory"
+include "runtime/bigint" as BI
+include "buffer"
+include "string"
+include "bytes"
+include "array"
+include "list"
+// Setup Primitives
+primitive magic = "@magic"
+// Types
+type Color = (Number, Number, Number)
+record PrintingColors {
+  // Basic Primitives
+  numberColor: Color,
+  stringColor: Color,
+  charColor: Color,
+  trueColor: Color,
+  falseColor: Color,
+  voidColor: Color,
+  lambdaColor: Color,
+  bytesColor: Color,
+  boxColor: Color,
+  adtColor: Color,
+  keyColor: Color,
+  unknownColor: Color,
+  defaultColor: Color,
+}
+record PrintBuf {
+  data: Buffer.Buffer,
+  mut currentColor: Color,
+}
+provide record PrintSettings {
+  colored: Bool,
+  indentAmount: Number,
+  maxDepth: Number,
+  newLineChar: String,
+  printSuffix: Bool,
+  byteLimit: Number,
+  // NewLines
+  forceNewLine: Bool,
+  newLineList: Option<Number>,
+  newLineArray: Option<Number>,
+  newLineRecord: Option<Number>,
+  newLineTuple: Option<Number>,
+}
+// Settings
+let defaultPrintColors = {
+  numberColor: (255, 133, 15),
+  stringColor: (204, 0, 0),
+  charColor: (173, 127, 168),
+  trueColor: (32, 218, 111),
+  falseColor: (239, 41, 41),
+  voidColor: (50, 175, 255),
+  lambdaColor: (255, 255, 255),
+  bytesColor: (255, 255, 255),
+  boxColor: (127, 219, 202),
+  adtColor: (127, 219, 202),
+  keyColor: (255, 255, 255),
+  unknownColor: (255, 255, 255),
+  defaultColor: (255, 255, 255),
+}
+let defaultSettings = {
+  colored: true, // TODO: Determine if we can use colors at all
+  indentAmount: 2,
+  maxDepth: 10,
+  newLineChar: "\n",
+  printSuffix: true,
+  byteLimit: 32,
+  forceNewLine: false,
+  newLineList: Some(200),
+  newLineArray: Some(200),
+  newLineRecord: Some(200),
+  newLineTuple: Some(200),
+}
+// Helper Functions
+let writeColor = (printBuf, printSettings, color) => {
+  if (printSettings.colored) {
+    let buf = printBuf.data
+    // Conserve On Colors
+    if (color != printBuf.currentColor) {
+      printBuf.currentColor = color
+      // Break Color Apart
+      let (r, g, b) = color
+      // Write Color
+      Buffer.addString("\x1b[38;2;", buf)
+      Buffer.addString(toString(r), buf)
+      Buffer.addChar(';', buf)
+      Buffer.addString(toString(g), buf)
+      Buffer.addChar(';', buf)
+      Buffer.addString(toString(b), buf)
+      Buffer.addChar('m', buf)
+    }
+  }
+}
+let writeChar = (c, printBuf, printSettings, color) => {
+  // Write Color
+  writeColor(printBuf, printSettings, color)
+  // Write Char
+  Buffer.addChar(c, printBuf.data)
+}
+let writeEscapedChar = (char, printBuf, printSettings, color) => {
+  let buf = printBuf.data
+  // Write Color
+  writeColor(printBuf, printSettings, color)
+  // Write Quote
+  Buffer.addChar('\'', buf)
+  // Write Char
+  match (char) {
+    '\b' => Buffer.addString("\\b", buf),
+    '\f' => Buffer.addString("\\f", buf),
+    '\n' => Buffer.addString("\\n", buf),
+    '\r' => Buffer.addString("\\r", buf),
+    '\t' => Buffer.addString("\\t", buf),
+    '\v' => Buffer.addString("\\v", buf),
+    '\\' => Buffer.addString("\\", buf),
+    '\'' => Buffer.addString("\\'", buf),
+    _ => Buffer.addChar(char, buf),
+  }
+  // Write Quote
+  Buffer.addChar('\'', buf)
+}
+let writeString = (str, printBuf, printSettings, color) => {
+  // Write Color
+  writeColor(printBuf, printSettings, color)
+  // Write String
+  Buffer.addString(str, printBuf.data)
+}
+@unsafe
+let writeEscapedString = (str, printBuf, printSettings, color) => {
+  let buf = printBuf.data
+  // Write Color
+  writeColor(printBuf, printSettings, color)
+  // Write Quote
+  Buffer.addChar('"', buf)
+  // Scan String
+  // TODO: Use forEachChar
+  String.forEachCodePoint(codePoint => {
+    from WasmI32 use { (>>) }
+    let char = tagChar(WasmI32.fromGrain(codePoint) >> 1n)
+    // Match The Escaped Chars
+    match (char) {
+      '\b' => Buffer.addString("\\b", buf),
+      '\f' => Buffer.addString("\\f", buf),
+      '\n' => Buffer.addString("\\n", buf),
+      '\r' => Buffer.addString("\\r", buf),
+      '\t' => Buffer.addString("\\t", buf),
+      '\v' => Buffer.addString("\\v", buf),
+      '\\' => Buffer.addString("\\", buf),
+      '\"' => Buffer.addString("\\\"", buf),
+      _ => Buffer.addChar(char, buf),
+    }
+  }, str)
+  // Write Quote
+  Buffer.addChar('"', buf)
+}
+let writeIndent = (depth, printBuf, printSettings) => {
+  // Calculate Indent
+  let spaceCount = depth * printSettings.indentAmount
+  // Write Indent
+  for (let mut i = 0; i < spaceCount; i += 1) {
+    Buffer.addChar(' ', printBuf.data)
+  }
+}
+let writeNewLine = (printBuf, printSettings) => {
+  // Write String
+  Buffer.addString(printSettings.newLineChar, printBuf.data)
+}
+let printBufToString = (printBuf, settings) => {
+  // Write The Output
+  let outputBuf = Buffer.make(0)
+  Buffer.addBuffer(printBuf.data, outputBuf)
+  // Write Reset
+  if (settings.colored) Buffer.addString("\x1b[0m", outputBuf)
+  // Write Our Actual Output
+  Buffer.toString(outputBuf)
+}
+// Type MetaData
+// TODO: Rewrite These Sections for better type safety
+@unsafe
+primitive typeMetadata = "@heap.type_metadata"
+primitive builtinId = "@builtin.id"
+
+@unsafe
+let _LIST_ID = untagSimpleNumber(builtinId("List"))
+@unsafe
+let _OPTION_ID = untagSimpleNumber(builtinId("Option"))
+@unsafe
+let _RESULT_ID = untagSimpleNumber(builtinId("Result"))
+
+let _SOME = "Some"
+let _NONE = "None"
+let _OK = "Ok"
+let _ERR = "Err"
+
+@unsafe
+let isListVariant = variant => {
+  from WasmI32 use { (>>), (==) }
+  let typeId = WasmI32.load(variant, 8n) >> 1n
+  typeId == _LIST_ID
+}
+
+@unsafe
+let getBuiltinVariantName = variant => {
+  from WasmI32 use { (>>), (==) }
+  let typeId = WasmI32.load(variant, 8n) >> 1n
+  let variantId = WasmI32.load(variant, 12n) >> 1n
+
+  match (typeId) {
+    id when id == _OPTION_ID => {
+      if (variantId == 0n) {
+        Memory.incRef(WasmI32.fromGrain(_SOME))
+      } else {
+        Memory.incRef(WasmI32.fromGrain(_NONE))
+      }
+    },
+    id when id == _RESULT_ID => {
+      if (variantId == 0n) {
+        Memory.incRef(WasmI32.fromGrain(_OK))
+      } else {
+        Memory.incRef(WasmI32.fromGrain(_ERR))
+      }
+    },
+    _ => -1n,
+  }
+}
+@unsafe
+let findTypeMetadata = typeHash => {
+  from WasmI32 use { remS as (%), (+), (<<), (<), (==) }
+  let typeMetadata = typeMetadata()
+  let numBuckets = WasmI32.load(typeMetadata, 0n)
+  let hashHash = typeHash % numBuckets
+  // First 8 bytes of metadata are for table size
+  let bucketPtr = typeMetadata + 8n + (hashHash << 3n) // 8 bytes/bucket
+  let bucketDataOffset = WasmI32.load(bucketPtr, 0n)
+  let bucketSize = WasmI32.load(bucketPtr, 4n)
+  let beginDataPtr = typeMetadata + bucketDataOffset
+  let endDataPtr = beginDataPtr + (bucketSize << 3n)
+  for (let mut ptr = beginDataPtr; ptr < endDataPtr; ptr += 8n) {
+    if (WasmI32.load(ptr, 0n) == typeHash) {
+      return typeMetadata + WasmI32.load(ptr, 4n)
+    }
+  }
+  return -1n
+}
+@unsafe
+let getFieldArray = (fields, arity) => {
+  from WasmI32 use { (<), (+), (*) }
+  let fieldArray = allocateArray(arity)
+
+  let mut fieldOffset = 0n
+  for (let mut i = 0n; i < arity; i += 1n) {
+    let fieldLength = WasmI32.load(fields + fieldOffset, 4n)
+    let fieldName = allocateString(fieldLength)
+    Memory.incRef(fieldName)
+    Memory.copy(fieldName + 8n, fields + fieldOffset + 8n, fieldLength)
+    WasmI32.store(fieldArray + i * 4n, fieldName, 8n)
+
+    fieldOffset += WasmI32.load(fields + fieldOffset, 0n)
+  }
+
+  fieldArray
+}
+
+@unsafe
+let getVariantMetadata = variant => {
+  from WasmI32 use { (>>), (+), (<), (==) }
+  let typeHash = WasmI32.load(variant, 4n) >> 1n
+  let variantId = WasmI32.load(variant, 12n) >> 1n
+
+  let mut block = findTypeMetadata(typeHash)
+
+  if (block == -1n) return -1n
+
+  let sectionLength = WasmI32.load(block, 0n)
+  block += 4n
+
+  let end = block + sectionLength
+  while (block < end) {
+    if (WasmI32.load(block, 8n) == variantId) {
+      return block
+    }
+    block += WasmI32.load(block, 0n)
+  }
+
+  return -1n
+}
+
+@unsafe
+let getRecordFieldNames = record_ => {
+  from WasmI32 use { (>>), (+), (==) }
+  let typeHash = WasmI32.load(record_, 4n) >> 1n
+  let arity = WasmI32.load(record_, 12n)
+
+  let mut fields = findTypeMetadata(typeHash)
+
+  if (fields == -1n) return -1n
+
+  fields += 4n
+  return getFieldArray(fields, arity)
+}
+// Check Stack Types
+@unsafe
+let isSimpleNumber = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_NUMBER_TAG_MASK) ==
+    Tags._GRAIN_NUMBER_TAG_TYPE
+}
+@unsafe
+let isPointer = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
+    Tags._GRAIN_GENERIC_HEAP_TAG_TYPE
+}
+@unsafe
+let isConstantValue = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
+    Tags._GRAIN_CONST_TAG_TYPE
+}
+@unsafe
+let isShortValue = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
+    Tags._GRAIN_SHORTVAL_TAG_TYPE
+}
+
+@unsafe
+let isChar = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
+    Tags._GRAIN_CHAR_SHORTVAL_TAG
+}
+@unsafe
+let isInt8 = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
+    Tags._GRAIN_INT8_TAG_MASK
+}
+@unsafe
+let isInt16 = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
+    Tags._GRAIN_INT16_TAG_MASK
+}
+@unsafe
+let isUInt8 = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
+    Tags._GRAIN_UINT8_TAG_MASK
+}
+@unsafe
+let isUInt16 = a => {
+  from WasmI32 use { (&), (==) }
+  (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
+    Tags._GRAIN_UINT16_TAG_MASK
+}
+// Stringify Functions
+let stringifyUnknown = (unknownMsg: String, depth, printBuf, printSettings) => {
+  writeChar('<', printBuf, printSettings, defaultPrintColors.unknownColor)
+  writeString(
+    unknownMsg,
+    printBuf,
+    printSettings,
+    defaultPrintColors.unknownColor
+  )
+  writeChar('>', printBuf, printSettings, defaultPrintColors.unknownColor)
+}
+
+let stringifyBool = (bool: Bool, depth, printBuf, printSettings) => {
+  if (bool) {
+    writeString("true", printBuf, printSettings, defaultPrintColors.trueColor)
+  } else {
+    writeString("false", printBuf, printSettings, defaultPrintColors.falseColor)
+  }
+}
+let stringifyVoid = (depth, printBuf, printSettings) =>
+  writeString("void", printBuf, printSettings, defaultPrintColors.voidColor)
+@unsafe
+let stringifyConstantValue = (const, depth, printBuf, printSettings) => {
+  from WasmI32 use { (==) }
+  match (WasmI32.fromGrain(const)) {
+    t when t == WasmI32.fromGrain(true) =>
+      stringifyBool(magic(const): Bool, depth, printBuf, printSettings),
+    t when t == WasmI32.fromGrain(false) =>
+      stringifyBool(magic(const): Bool, depth, printBuf, printSettings),
+    t when t == WasmI32.fromGrain(void) =>
+      stringifyVoid(depth, printBuf, printSettings),
+    _ => stringifyUnknown("unknown constant", depth, printBuf, printSettings),
+  }
+}
+
+let stringifyChar = (char: Char, depth, printBuf, printSettings) => {
+  if (depth == 0)
+    writeChar(char, printBuf, printSettings, defaultPrintColors.charColor)
+  else writeEscapedChar(
+    char,
+    printBuf,
+    printSettings,
+    defaultPrintColors.charColor
+  )
+}
+@unsafe
+let stringifyInt8 = (int8: Int8, depth, printBuf, printSettings) => {
+  // TODO: Support Printing As Hex
+  from WasmI32 use { (>>) }
+  let val = WasmI32.fromGrain(int8) >> 8n
+  let val = NumberUtils.itoa32(val, 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("s", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyInt16 = (int16: Int16, depth, printBuf, printSettings) => {
+  // TODO: Support Printing As Hex
+  from WasmI32 use { (>>) }
+  let val = WasmI32.fromGrain(int16) >> 8n
+  let val = NumberUtils.itoa32(val, 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("S", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyUInt8 = (uint8: Uint8, depth, printBuf, printSettings) => {
+  // TODO: Support Printing As Hex
+  from WasmI32 use { (>>) }
+  let val = WasmI32.fromGrain(uint8) >> 8n
+  let val = NumberUtils.utoa32(val, 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("us", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyUInt16 = (uint16: Uint16, depth, printBuf, printSettings) => {
+  // TODO: Support Printing As Hex
+  from WasmI32 use { (>>) }
+  let val = WasmI32.fromGrain(uint16) >> 8n
+  let val = NumberUtils.utoa32(val, 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("uS", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyShortValue = (short, depth, printBuf, printSettings) => {
+  match (WasmI32.fromGrain(short)) {
+    t when isChar(t) =>
+      stringifyChar(magic(short): Char, depth, printBuf, printSettings),
+    t when isInt8(t) =>
+      stringifyInt8(magic(short): Int8, depth, printBuf, printSettings),
+    t when isInt16(t) =>
+      stringifyInt16(magic(short): Int16, depth, printBuf, printSettings),
+    t when isUInt8(t) =>
+      stringifyUInt8(magic(short): Uint8, depth, printBuf, printSettings),
+    t when isUInt16(t) =>
+      stringifyUInt16(magic(short): Uint16, depth, printBuf, printSettings),
+    _ =>
+      stringifyUnknown("unknown short value", depth, printBuf, printSettings),
+  }
+}
+
+@unsafe
+let stringifyNumber = (num: Number, depth, printBuf, printSettings) => {
+  // TODO: Support Hex Printing
+  from WasmI32 use { (>>), (==) }
+  // Check If Simple Number
+  if (isSimpleNumber(num)) {
+    let val = WasmI32.fromGrain(num) >> 1n
+    let val = NumberUtils.itoa32(val, 10n)
+    writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  } else {
+    // Match heap Number
+    let ptr = WasmI32.fromGrain(num)
+    let boxedNumberTag = WasmI32.load(ptr, 4n)
+    match (boxedNumberTag) {
+      t when t == Tags._GRAIN_FLOAT64_BOXED_NUM_TAG => {
+        let val = NumberUtils.dtoa(WasmF64.load(ptr, 8n))
+        writeString(
+          val,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
+      },
+      t when t == Tags._GRAIN_INT64_BOXED_NUM_TAG => {
+        let val = NumberUtils.itoa64(WasmI64.load(ptr, 8n), 10n)
+        writeString(
+          val,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
+      },
+      t when t == Tags._GRAIN_RATIONAL_BOXED_NUM_TAG => {
+        let numerator = BI.bigIntToString10(WasmI32.load(ptr, 8n))
+        let denominator = BI.bigIntToString10(WasmI32.load(ptr, 12n))
+        writeString(
+          numerator,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
+        writeChar('/', printBuf, printSettings, defaultPrintColors.numberColor)
+        writeString(
+          denominator,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
+      },
+      t when t == Tags._GRAIN_BIGINT_BOXED_NUM_TAG => {
+        let val = BI.bigIntToString10(ptr)
+        writeString(
+          val,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
+      },
+      _ => stringifyUnknown("unknown number", depth, printBuf, printSettings),
+    }
+  }
+}
+let stringifyString = (str: String, depth, printBuf, printSettings) => {
+  if (depth == 0)
+    writeString(str, printBuf, printSettings, defaultPrintColors.stringColor)
+  else writeEscapedString(
+    str,
+    printBuf,
+    printSettings,
+    defaultPrintColors.stringColor
+  )
+}
+let stringifyLambda = (lambda, depth, printBuf, printSettings) => {
+  writeString(
+    "<lambda>",
+    printBuf,
+    printSettings,
+    defaultPrintColors.lambdaColor
+  )
+}
+@unsafe
+let stringifyBytes = (bytes: Bytes, depth, printBuf, printSettings) => {
+  from WasmI32 use { (>>) }
+  writeString(
+    "<bytes: ",
+    printBuf,
+    printSettings,
+    defaultPrintColors.bytesColor
+  )
+  let byteLimit = printSettings.byteLimit
+  // Write Bytes
+  let byteCount = Bytes.length(bytes)
+  let printLen = if (byteCount < byteLimit) byteCount else byteLimit
+  for (let mut i = 0; i < printLen; i += 1) {
+    let val = Bytes.getUint8(i, bytes)
+    let val = NumberUtils.itoa32(WasmI32.fromGrain(val) >> 8n, 16n)
+    writeString(val, printBuf, printSettings, defaultPrintColors.bytesColor)
+    if (i < printLen - 1)
+      writeChar(' ', printBuf, printSettings, defaultPrintColors.bytesColor)
+  }
+  if (byteCount > byteLimit) {
+    writeString("...", printBuf, printSettings, defaultPrintColors.bytesColor)
+  }
+  writeString(">", printBuf, printSettings, defaultPrintColors.bytesColor)
+}
+@unsafe
+let stringifyInt32 = (int32: Int32, depth, printBuf, printSettings) => {
+  let ptr = WasmI32.fromGrain(int32)
+  let val = NumberUtils.itoa32(WasmI32.load(ptr, 4n), 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("l", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyUInt32 = (uint32: Uint32, depth, printBuf, printSettings) => {
+  let ptr = WasmI32.fromGrain(uint32)
+  let val = NumberUtils.utoa32(WasmI32.load(ptr, 4n), 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("ul", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyFloat32 = (float32: Float32, depth, printBuf, printSettings) => {
+  let ptr = WasmI32.fromGrain(float32)
+  let val = NumberUtils.dtoa(WasmF64.promoteF32(WasmF32.load(ptr, 4n)))
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("f", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyInt64 = (int64: Int64, depth, printBuf, printSettings) => {
+  let ptr = WasmI32.fromGrain(int64)
+  let val = NumberUtils.itoa64(WasmI64.load(ptr, 8n), 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("L", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let stringifyUInt64 = (uint64: Uint64, depth, printBuf, printSettings) => {
+  let ptr = WasmI32.fromGrain(uint64)
+  let val = NumberUtils.utoa64(WasmI64.load(ptr, 8n), 10n)
+  writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
+  if (printSettings.printSuffix)
+    writeString("uL", printBuf, printSettings, defaultPrintColors.numberColor)
+}
+@unsafe
+let rec stringifyTupleHelp =
+  (
+    tupValues,
+    addNewLines,
+    depth,
+    printBuf,
+    printSettings,
+    allowBox=true,
+  ) => {
+  // Write Start
+  if (List.length(tupValues) == 1 && allowBox)
+    writeString("box", printBuf, printSettings, defaultPrintColors.boxColor)
+  writeChar('(', printBuf, printSettings, defaultPrintColors.defaultColor)
+  if (addNewLines) writeNewLine(printBuf, printSettings)
+  // Write Contents
+  let len = List.length(tupValues)
+  List.forEachi((e, i) => {
+    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    if (i < len - 1) {
+      writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
+      writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+    }
+    if (addNewLines) writeNewLine(printBuf, printSettings)
+  }, tupValues)
+  // Write Ending
+  if (addNewLines) writeIndent(depth, printBuf, printSettings)
+  writeChar(')', printBuf, printSettings, defaultPrintColors.defaultColor)
+}
+and stringifyTuple = (tup, depth, printBuf, printSettings) => {
+  from WasmI32 use { (==), (<), (*), (-), (+) }
+  let ptr = WasmI32.fromGrain(tup)
+  let tupleLength = WasmI32.load(ptr, 4n)
+  // Get Fields
+  let mut fields = []
+  for (let mut i = 0n; i < tupleLength * 4n - 3n; i += 4n) {
+    let val = WasmI32.load(ptr + i, 8n)
+    fields = [magic(val), ...fields]
+  }
+  let fields = List.reverse(fields)
+  from Pervasives use { (+) }
+  // Determine If We Need A NewLine
+  let addNewLines = match (printSettings.newLineTuple) {
+    _ when printSettings.forceNewLine => true,
+    _ when tupleLength == 1n => false,
+    Some(n) => {
+      // Calculate Length
+      let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
+      let fakeSettings = { ...printSettings, colored: false }
+      stringifyTupleHelp(fields, false, depth, fakePrintBuf, fakeSettings)
+      String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+    },
+    None => false,
+  }
+  // Stringify Items
+  stringifyTupleHelp(fields, addNewLines, depth, printBuf, printSettings)
+}
+and stringifyList = (list: List<a>, depth, printBuf, printSettings) => {
+  let addNewLines = match (printSettings.newLineList) {
+    _ when printSettings.forceNewLine => true,
+    Some(n) => {
+      // Calculate Length
+      let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
+      let fakeSettings = { ...printSettings, colored: false }
+      List.forEachi((e, i) => {
+        stringifyItem(e, depth + 1, false, fakePrintBuf, fakeSettings)
+      }, list)
+      String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+    },
+    None => false,
+  }
+  // Write Array Open
+  writeString("[", printBuf, printSettings, defaultPrintColors.defaultColor)
+  if (addNewLines) writeNewLine(printBuf, printSettings)
+  // Write Array Items
+  List.forEachi((e, i) => {
+    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    if (i < List.length(list) - 1) {
+      writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
+      writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+    }
+    if (addNewLines) writeNewLine(printBuf, printSettings)
+  }, list)
+  // Write Array Close
+  if (addNewLines) writeIndent(depth, printBuf, printSettings)
+  writeString("]", printBuf, printSettings, defaultPrintColors.defaultColor)
+}
+and stringifyArray = (arr: Array<a>, depth, printBuf, printSettings) => {
+  let addNewLines = match (printSettings.newLineArray) {
+    _ when printSettings.forceNewLine => true,
+    Some(n) => {
+      // Calculate Length
+      let fakePrintBuf = { data: Buffer.make(0), currentColor: (255, 255, 255) }
+      let fakeSettings = { ...printSettings, colored: false }
+      Array.forEachi((e, i) => {
+        stringifyItem(e, depth + 1, false, fakePrintBuf, fakeSettings)
+        if (i < Array.length(arr) - 1) {
+          writeChar(
+            ',',
+            fakePrintBuf,
+            fakeSettings,
+            defaultPrintColors.defaultColor
+          )
+          writeChar(
+            ' ',
+            fakePrintBuf,
+            fakeSettings,
+            defaultPrintColors.defaultColor
+          )
+        }
+      }, arr)
+      String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+    },
+    None => false,
+  }
+  // Write Array Open
+  writeString("[>", printBuf, printSettings, defaultPrintColors.defaultColor)
+  if (addNewLines) writeNewLine(printBuf, printSettings)
+  // Write Array Items
+  Array.forEachi((e, i) => {
+    stringifyItem(e, depth + 1, addNewLines, printBuf, printSettings)
+    if (i < Array.length(arr) - 1) {
+      writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
+      writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+    }
+    if (addNewLines) writeNewLine(printBuf, printSettings)
+  }, arr)
+  // Write Array Close
+  if (addNewLines) writeIndent(depth, printBuf, printSettings)
+  writeString("]", printBuf, printSettings, defaultPrintColors.defaultColor)
+}
+and tupleAdtHelp = (ptr, variantName, depth, printBuf, printSettings) => {
+  from WasmI32 use { (==), (>), (*), (-), (>=), (+) }
+  let variantArity = WasmI32.load(ptr, 16n)
+  // Write Name
+  writeString(variantName, printBuf, printSettings, defaultPrintColors.adtColor)
+  // Write tuple
+  if (variantArity > 0n) {
+    // Collect Our Tuple Values
+    let mut values = []
+    for (let mut i = variantArity * 4n - 4n; i >= 0n; i -= 4n) {
+      values = [magic(WasmI32.load(ptr + i, 20n)), ...values]
+    }
+    // Call To Our Tuple Helper
+    from Pervasives use { (+), (>=) }
+    // Determine If We Need A NewLine
+    let addNewLines = match (printSettings.newLineTuple) {
+      _ when printSettings.forceNewLine => true,
+      Some(n) => {
+        // Calculate Length
+        let fakePrintBuf = {
+          data: Buffer.make(0),
+          currentColor: (255, 255, 255),
+        }
+        let fakeSettings = { ...printSettings, colored: false }
+        stringifyTupleHelp(
+          values,
+          false,
+          depth,
+          fakePrintBuf,
+          fakeSettings,
+          allowBox=false
+        )
+        String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+      },
+      None => false,
+    }
+    // Stringify Items
+    stringifyTupleHelp(
+      values,
+      addNewLines,
+      depth,
+      printBuf,
+      printSettings,
+      allowBox=false
+    )
+  }
+}
+and recordAdtHelp = (ptr, name, depth, printBuf, printSettings) => {
+  void
+}
+and stringifyAdt = (adt, depth, printBuf, printSettings) => {
+  from WasmI32 use { (!=) }
+  let ptr = WasmI32.fromGrain(adt)
+  let builtinVariantName = getBuiltinVariantName(ptr)
+  if (builtinVariantName != -1n) {
+    // Assumes that all builtin variants do not have inline record
+    // constructors; if this changes this should be changed as well
+    tupleAdtHelp(
+      ptr,
+      WasmI32.toGrain(builtinVariantName),
+      depth,
+      printBuf,
+      printSettings
+    )
+  } else if (isListVariant(ptr)) {
+    stringifyList(magic(adt), depth, printBuf, printSettings)
+  } else {
+    let variantPtr = getVariantMetadata(ptr)
+    from WasmI32 use { (==), (+) }
+    if (variantPtr == -1n) {
+      writeString(
+        "<enum value>",
+        printBuf,
+        printSettings,
+        defaultPrintColors.adtColor
+      )
+    } else {
+      // Get Name
+      let length = WasmI32.load(variantPtr, 12n)
+      let variantName = allocateString(length)
+      Memory.copy(variantName + 8n, variantPtr + 16n, length)
+      let variantName = WasmI32.toGrain(variantName): String
+      let distToRecordFields = WasmI32.load(variantPtr, 4n)
+      let isRecordVariant = distToRecordFields != 0n
+      if (isRecordVariant) {
+        // Make Array of Values
+        let mut values = []
+        from WasmI32 use { (<), (*), (-), (+) }
+        // TODO: This is a multi-data type array, really consider how gross this is and unsafe this is
+        let fields = variantPtr + distToRecordFields
+        let recordArity = WasmI32.load(ptr, 16n)
+        let recordVariantFields = getFieldArray(fields, recordArity)
+        for (let mut i = 0n; i < recordArity * 4n - 3n; i += 4n) {
+          let fieldValue = WasmI32.load(ptr + i, 20n)
+          values = [magic(fieldValue), ...values]
+        }
+        let values = List.reverse(values)
+        let fields = Array.map(e => e, magic(recordVariantFields))
+        // Get String Length
+        let addNewLines = match (printSettings.newLineRecord) {
+          _ when printSettings.forceNewLine => true,
+          Some(n) => {
+            // Calculate Length
+            let fakePrintBuf = {
+              data: Buffer.make(0),
+              currentColor: (255, 255, 255),
+            }
+            let fakeSettings = { ...printSettings, colored: false }
+            stringifyRecordHelp(
+              fields,
+              Array.fromList(values),
+              depth,
+              false,
+              fakePrintBuf,
+              fakeSettings
+            )
+            String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+          },
+          None => false,
+        }
+        // Write Record
+        writeString(
+          variantName,
+          printBuf,
+          printSettings,
+          defaultPrintColors.adtColor
+        )
+        stringifyRecordHelp(
+          fields,
+          Array.fromList(values),
+          depth,
+          addNewLines,
+          printBuf,
+          printSettings
+        )
+      } else {
+        tupleAdtHelp(ptr, variantName, depth, printBuf, printSettings)
+      }
+    }
+  }
+}
+and stringifyRecordHelp =
+  (
+    fields: Array<String>,
+    values: Array<a>,
+    depth,
+    splitLines,
+    printBuf,
+    printSettings,
+  ) => {
+  // Write Open
+  writeString("{", printBuf, printSettings, defaultPrintColors.defaultColor)
+  writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+  if (splitLines) writeNewLine(printBuf, printSettings)
+  // Write Contents
+  for (let mut i = 0; i < Array.length(fields); i += 1) {
+    // Get The Field And Value
+    let field = fields[i]
+    let value = values[i]
+    // Write Indent
+    if (splitLines) writeIndent(depth + 1, printBuf, printSettings)
+    // Write Contents
+    writeString(field, printBuf, printSettings, defaultPrintColors.keyColor)
+    writeChar(':', printBuf, printSettings, defaultPrintColors.defaultColor)
+    writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+    stringifyItem(value, depth + 1, false, printBuf, printSettings)
+    // Write Comma
+    if (i < Array.length(fields) - 1)
+      writeChar(',', printBuf, printSettings, defaultPrintColors.defaultColor)
+    writeChar(' ', printBuf, printSettings, defaultPrintColors.defaultColor)
+    // Write NewLine
+    if (splitLines) writeNewLine(printBuf, printSettings)
+  }
+  // Write Close
+  writeString("}", printBuf, printSettings, defaultPrintColors.defaultColor)
+}
+and stringifyRecord = (item, depth, printBuf, printSettings) => {
+  from WasmI32 use { (==) }
+  let ptr = WasmI32.fromGrain(item)
+  let recordArity = WasmI32.load(ptr, 12n)
+  let fieldsRaw = getRecordFieldNames(ptr)
+  if (fieldsRaw == -1n) {
+    writeString(
+      "<record value>",
+      printBuf,
+      printSettings,
+      defaultPrintColors.defaultColor
+    )
+  } else {
+    // Make Array of Values
+    let mut values = []
+    from WasmI32 use { (<), (*), (-), (+) }
+    // TODO: This is a multi-data type array, really consider how gross this is and unsafe this is
+    for (let mut i = 0n; i < recordArity * 4n - 3n; i += 4n) {
+      let fieldValue = WasmI32.load(ptr + i, 16n)
+      values = [magic(fieldValue), ...values]
+    }
+    let values = List.reverse(values)
+    let fields = Array.map(e => e, magic(fieldsRaw))
+    // Get String Length
+    let addNewLines = match (printSettings.newLineRecord) {
+      _ when printSettings.forceNewLine => true,
+      Some(n) => {
+        // Calculate Length
+        let fakePrintBuf = {
+          data: Buffer.make(0),
+          currentColor: (255, 255, 255),
+        }
+        let fakeSettings = { ...printSettings, colored: false }
+        stringifyRecordHelp(
+          fields,
+          Array.fromList(values),
+          depth,
+          false,
+          fakePrintBuf,
+          fakeSettings
+        )
+        String.length(printBufToString(fakePrintBuf, fakeSettings)) >= n
+      },
+      None => false,
+    }
+    // Write Record
+    stringifyRecordHelp(
+      fields,
+      Array.fromList(values),
+      depth,
+      addNewLines,
+      printBuf,
+      printSettings
+    )
+  }
+}
+and stringifyHeapValue = (item, depth, printBuf, printSettings) => {
+  from WasmI32 use { (==) }
+  let ptr = WasmI32.fromGrain(item)
+  let tag = WasmI32.load(ptr, 0n)
+  match (tag) {
+    t when t == Tags._GRAIN_STRING_HEAP_TAG =>
+      stringifyString(magic(item): String, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_ADT_HEAP_TAG =>
+      stringifyAdt(item, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_RECORD_HEAP_TAG =>
+      stringifyRecord(item, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_ARRAY_HEAP_TAG =>
+      stringifyArray(magic(item): Array<a>, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_BOXED_NUM_HEAP_TAG =>
+      stringifyNumber(magic(item): Number, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_LAMBDA_HEAP_TAG =>
+      stringifyLambda(item, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_TUPLE_HEAP_TAG =>
+      stringifyTuple(item, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_BYTES_HEAP_TAG =>
+      stringifyBytes(magic(item): Bytes, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_INT32_HEAP_TAG =>
+      stringifyInt32(magic(item): Int32, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_FLOAT32_HEAP_TAG =>
+      stringifyFloat32(magic(item): Float32, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_UINT32_HEAP_TAG =>
+      stringifyUInt32(magic(item): Uint32, depth, printBuf, printSettings),
+    t when t == Tags._GRAIN_UINT64_HEAP_TAG =>
+      stringifyUInt64(magic(item): Uint64, depth, printBuf, printSettings),
+    _ => stringifyUnknown("unknown heap value", depth, printBuf, printSettings),
+  }
+}
+and stringifyItem = (item, depth, lastNewLine, printBuf, printSettings) => {
+  if (lastNewLine) writeIndent(depth, printBuf, printSettings)
+  // Match The Item
+  match (item) {
+    // Determine The Stack Type
+    t when isSimpleNumber(t) =>
+      stringifyNumber(magic(t): Number, depth, printBuf, printSettings),
+    t when isPointer(t) =>
+      stringifyHeapValue(t, depth, printBuf, printSettings),
+    t when isConstantValue(t) =>
+      stringifyConstantValue(t, depth, printBuf, printSettings),
+    t when isShortValue(t) =>
+      stringifyShortValue(t, depth, printBuf, printSettings),
+    // Must Be Unknown
+    _ => stringifyUnknown("unknown value", depth, printBuf, printSettings),
+  }
+}
+let stringify = (item, printSettings) => {
+  // Create Print Buffer
+  let printBuffer = { data: Buffer.make(0), currentColor: (-1, -1, -1) }
+  // Stringify Item
+  stringifyItem(item, 0, false, printBuffer, printSettings)
+  // Return String
+  printBufToString(printBuffer, printSettings)
+}
+// Printing
+provide let print = (a, printSettings=defaultSettings) => {
+  // Stringify
+  let str = stringify(a, printSettings)
+  // Print
+  // TODO: Use Unsafe fdWrite instead to avoid the default printChain
+  print(str)
+}
