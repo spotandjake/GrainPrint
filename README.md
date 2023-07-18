@@ -14,7 +14,7 @@ Grain v0.6 has added cycle support to the native `print` function, this library 
 ## TODO
 * Make A PrintTree, This allows for faster support of line breaks and more complex line breaking mechanics surrounding nesting
 * Detect support for colors
-* Create Fall back to basic ascii colors over true color
+  * Create Fall back to basic ascii colors over true color
 * Add a compact mode
 * Cycles Support
 * Simply Package by separating type logic from printing (This would give an opportunity to improve type safety)
@@ -22,5 +22,3 @@ Grain v0.6 has added cycle support to the native `print` function, this library 
   * I'm picturing a serialization package, that converts the adts, enums and records over to a data representation
 * Check For Memory Leaks
 * Remove dependencies on stdlib and Pervasives
-* Write Grain Doc
-* Support Custom Printing Radix

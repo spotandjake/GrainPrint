@@ -47,6 +47,32 @@ record PrintBuf {
   data: Buffer.Buffer,
   mut currentColor: Color,
 }
+/**
+ * The Desired Printing Radix.
+ */
+provide enum Radix {
+  Hex,
+  Dec,
+  Oct,
+  Bin,
+}
+/**
+ * Printing Settings.
+ *
+ * `colored` - Wether to use colors or not.
+ * `indentAmount` - How much to indent by each level.
+ * `maxDepth` - The maximum depth to print.
+ * `newLineChar` - The character to use for new lines.
+ * `printSuffix` - Wether to print the suffix or not.
+ * `byteLimit` - The maximum number of bytes to print.
+ * `rainbowBracket` - Wether to use rainbow brackets or not.
+ * `radix` - The radix to use for numbers.
+ * `forceNewLine` - Wether to force new lines or not.
+ * `newLineList` - The maximum length before we split list.
+ * `newLineArray` - The maximum length before we split arrays.
+ * `newLineRecord` - The maximum length before we split records.
+ * `newLineTuple` - The maximum length before we split tuples.
+ */
 provide record PrintSettings {
   colored: Bool,
   indentAmount: Number,
@@ -55,6 +81,7 @@ provide record PrintSettings {
   printSuffix: Bool,
   byteLimit: Number,
   rainbowBracket: Bool,
+  radix: Radix,
   // NewLines
   forceNewLine: Bool,
   newLineList: Option<Number>,
@@ -88,12 +115,29 @@ let defaultSettings = {
   byteLimit: 32,
   forceNewLine: false,
   rainbowBracket: false,
+  radix: Dec,
   newLineList: Some(200),
   newLineArray: Some(200),
   newLineRecord: Some(200),
   newLineTuple: Some(200),
 }
 // Helper Functions
+let getRadixIndex = radix => {
+  match (radix) {
+    Hex => 16,
+    Dec => 10,
+    Oct => 8,
+    Bin => 2,
+  }
+}
+let getRadixPrefix = radix => {
+  match (radix) {
+    Hex => "0x",
+    Dec => "",
+    Oct => "0o",
+    Bin => "0b",
+  }
+}
 let writeColor = (printBuf, printSettings, color) => {
   if (printSettings.colored) {
     let buf = printBuf.data
@@ -190,6 +234,9 @@ let writeBracket = (bracket, printBuf, printSettings, color) => {
   if (printSettings.rainbowBracket) {
     // Write Color
     writeColor(printBuf, printSettings, color)
+  } else {
+    // Write Color
+    writeColor(printBuf, printSettings, defaultPrintColors.defaultColor)
   }
   Buffer.addChar(bracket, printBuf.data)
 }
@@ -436,40 +483,68 @@ let stringifyChar = (char: Char, depth, printBuf, printSettings) => {
 }
 @unsafe
 let stringifyInt8 = (int8: Int8, printBuf, printSettings) => {
-  // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
+  let radix = getRadixIndex(printSettings.radix)
+  let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(int8) >> 8n
-  let val = NumberUtils.itoa32(val, 10n)
+  let val = NumberUtils.itoa32(val, radix)
+  writeString(
+    getRadixPrefix(printSettings.radix),
+    printBuf,
+    printSettings,
+    defaultPrintColors.numberColor
+  )
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
   if (printSettings.printSuffix)
     writeString("s", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
 let stringifyInt16 = (int16: Int16, printBuf, printSettings) => {
-  // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
+  let radix = getRadixIndex(printSettings.radix)
+  let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(int16) >> 8n
-  let val = NumberUtils.itoa32(val, 10n)
+  let val = NumberUtils.itoa32(val, radix)
+  writeString(
+    getRadixPrefix(printSettings.radix),
+    printBuf,
+    printSettings,
+    defaultPrintColors.numberColor
+  )
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
   if (printSettings.printSuffix)
     writeString("S", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
 let stringifyUInt8 = (uint8: Uint8, printBuf, printSettings) => {
-  // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
+  let radix = getRadixIndex(printSettings.radix)
+  let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(uint8) >> 8n
-  let val = NumberUtils.utoa32(val, 10n)
+  let val = NumberUtils.utoa32(val, radix)
+  writeString(
+    getRadixPrefix(printSettings.radix),
+    printBuf,
+    printSettings,
+    defaultPrintColors.numberColor
+  )
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
   if (printSettings.printSuffix)
     writeString("us", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
 let stringifyUInt16 = (uint16: Uint16, printBuf, printSettings) => {
-  // TODO: Support Printing As Hex
   from WasmI32 use { (>>) }
+  let radix = getRadixIndex(printSettings.radix)
+  let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(uint16) >> 8n
-  let val = NumberUtils.utoa32(val, 10n)
+  let val = NumberUtils.utoa32(val, radix)
+  writeString(
+    getRadixPrefix(printSettings.radix),
+    printBuf,
+    printSettings,
+    defaultPrintColors.numberColor
+  )
   writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
   if (printSettings.printSuffix)
     writeString("uS", printBuf, printSettings, defaultPrintColors.numberColor)
@@ -494,11 +569,20 @@ let stringifyShortValue = (short, depth, printBuf, printSettings) => {
 @unsafe
 let stringifyNumber = (num: Number, printBuf, printSettings) => {
   // TODO: Support Hex Printing
+  let radix = getRadixIndex(printSettings.radix)
+  let radix = untagSimpleNumber(radix)
+  let radixPrefix = getRadixPrefix(printSettings.radix)
   from WasmI32 use { (>>), (==) }
   // Check If Simple Number
   if (isSimpleNumber(num)) {
     let val = WasmI32.fromGrain(num) >> 1n
-    let val = NumberUtils.itoa32(val, 10n)
+    let val = NumberUtils.itoa32(val, radix)
+    writeString(
+      radixPrefix,
+      printBuf,
+      printSettings,
+      defaultPrintColors.numberColor
+    )
     writeString(val, printBuf, printSettings, defaultPrintColors.numberColor)
   } else {
     // Match heap Number
@@ -515,7 +599,13 @@ let stringifyNumber = (num: Number, printBuf, printSettings) => {
         )
       },
       t when t == Tags._GRAIN_INT64_BOXED_NUM_TAG => {
-        let val = NumberUtils.itoa64(WasmI64.load(ptr, 8n), 10n)
+        let val = NumberUtils.itoa64(WasmI64.load(ptr, 8n), radix)
+        writeString(
+          radixPrefix,
+          printBuf,
+          printSettings,
+          defaultPrintColors.numberColor
+        )
         writeString(
           val,
           printBuf,
@@ -541,6 +631,7 @@ let stringifyNumber = (num: Number, printBuf, printSettings) => {
         )
       },
       t when t == Tags._GRAIN_BIGINT_BOXED_NUM_TAG => {
+        // TODO: Support Hex
         let val = BI.bigIntToString10(ptr)
         writeString(
           val,
@@ -1186,6 +1277,12 @@ let stringify = (item, printSettings) => {
   printBufToString(printBuffer, printSettings)
 }
 // Printing
+/**
+ * Prints the given operand to the console. Works for any datatype.
+ *
+ * @param a: The operand to print.
+ * @param printSettings: The settings to use when printing.
+ */
 provide let print = (a, printSettings=defaultSettings) => {
   // Stringify
   let str = stringify(a, printSettings)
