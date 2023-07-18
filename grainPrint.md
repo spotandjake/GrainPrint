@@ -59,10 +59,20 @@ Printing Settings.
 
 Functions and constants included in the GrainPrint module.
 
+### GrainPrint.**defaultSettings**
+
+```grain
+defaultSettings : PrintSettings
+```
+
+The default settings used for printing.
+
+This is a great starting place for making your own settings.
+
 ### GrainPrint.**print**
 
 ```grain
-print : (a: a, ?printSettings: PrintSettings) => Void
+print : (a: a, ?settings: PrintSettings) => Void
 ```
 
 Prints the given operand to the console. Works for any datatype.
@@ -72,5 +82,5 @@ Parameters:
 |param|type|description|
 |-----|----|-----------|
 |`a`|`a`|The operand to print.|
-|`printSettings`|`Option<PrintSettings>`|The settings to use when printing.|
+|`settings`|`Option<PrintSettings>`|The settings to use when printing.|
 

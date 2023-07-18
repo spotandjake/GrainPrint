@@ -106,7 +106,12 @@ let defaultPrintColors = {
   unknownColor: (255, 255, 255),
   defaultColor: (255, 255, 255),
 }
-let defaultSettings = {
+/**
+ * The default settings used for printing.
+ *
+ * This is a great starting place for making your own settings.
+ */
+provide let defaultSettings = {
   colored: true, // TODO: Determine if we can use colors at all
   indentAmount: 2,
   maxDepth: Infinity,
@@ -1281,11 +1286,11 @@ let stringify = (item, printSettings) => {
  * Prints the given operand to the console. Works for any datatype.
  *
  * @param a: The operand to print.
- * @param printSettings: The settings to use when printing.
+ * @param settings: The settings to use when printing.
  */
-provide let print = (a, printSettings=defaultSettings) => {
+provide let print = (a, settings=defaultSettings) => {
   // Stringify
-  let str = stringify(a, printSettings)
+  let str = stringify(a, settings)
   // Print
   // TODO: Use Unsafe fdWrite instead to avoid the default printChain
   print(str)
