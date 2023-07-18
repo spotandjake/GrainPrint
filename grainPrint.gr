@@ -87,7 +87,7 @@ let defaultPrintColors = {
 let defaultSettings = {
   colored: true, // TODO: Determine if we can use colors at all
   indentAmount: 2,
-  maxDepth: 10,
+  maxDepth: Infinity,
   newLineChar: "\n",
   printSuffix: true,
   byteLimit: 32,
@@ -1026,6 +1026,14 @@ and stringifyItem = (item, depth, lastNewLine, printBuf, printSettings) => {
   if (lastNewLine) writeIndent(depth, printBuf, printSettings)
   // Match The Item
   match (item) {
+    _ when depth > printSettings.maxDepth => {
+      writeString(
+        "<item>",
+        printBuf,
+        printSettings,
+        defaultPrintColors.defaultColor
+      )
+    },
     // Determine The Stack Type
     t when isSimpleNumber(t) =>
       stringifyNumber(magic(t): Number, depth, printBuf, printSettings),
