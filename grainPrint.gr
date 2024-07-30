@@ -3,26 +3,21 @@ module GrainPrint
 // Some Code Related to Getting Types is taken from here:
 // https://github.com/grain-lang/grain/blob/main/stdlib/runtime/string.gr
 // Includes
-include "runtime/dataStructures"
-from DataStructures use {
-  tagChar,
-  allocateString,
-  allocateArray,
-  untagSimpleNumber,
-}
-include "runtime/numberUtils"
-include "runtime/unsafe/tags"
-include "runtime/unsafe/wasmi32"
-include "runtime/unsafe/wasmi64"
-include "runtime/unsafe/wasmf32"
-include "runtime/unsafe/wasmf64"
-include "runtime/unsafe/memory"
-include "runtime/bigint" as BI
-include "buffer"
-include "string"
-include "bytes"
-include "array"
-include "list"
+from "runtime/dataStructures" include DataStructures
+use DataStructures.{ tagChar, allocateString, allocateArray, untagSimpleNumber }
+from "runtime/numberUtils" include NumberUtils
+from "runtime/unsafe/tags" include Tags
+from "runtime/unsafe/wasmi32" include WasmI32
+from "runtime/unsafe/wasmi64" include WasmI64
+from "runtime/unsafe/wasmf32" include WasmF32
+from "runtime/unsafe/wasmf64" include WasmF64
+from "runtime/unsafe/memory" include Memory
+from "runtime/bigint" include Bigint as BI
+from "buffer" include Buffer
+from "string" include String
+from "bytes" include Bytes
+from "array" include Array
+from "list" include List
 // Setup Primitives
 primitive magic = "@magic"
 // Types
@@ -205,7 +200,7 @@ let writeEscapedString = (str, printBuf, printSettings, color) => {
   // Scan String
   // TODO: Use forEachChar
   String.forEachCodePoint(codePoint => {
-    from WasmI32 use { (>>) }
+    use WasmI32.{ (>>) }
     let char = tagChar(WasmI32.fromGrain(codePoint) >> 1n)
     // Match The Escaped Chars
     match (char) {
@@ -216,7 +211,7 @@ let writeEscapedString = (str, printBuf, printSettings, color) => {
       '\t' => Buffer.addString("\\t", buf),
       '\v' => Buffer.addString("\\v", buf),
       '\\' => Buffer.addString("\\", buf),
-      '\"' => Buffer.addString("\\\"", buf),
+      '"' => Buffer.addString("\\\"", buf),
       _ => Buffer.addChar(char, buf),
     }
   }, str)
@@ -274,14 +269,14 @@ let _ERR = "Err"
 
 @unsafe
 let isListVariant = variant => {
-  from WasmI32 use { (>>), (==) }
+  use WasmI32.{ (>>), (==) }
   let typeId = WasmI32.load(variant, 8n) >> 1n
   typeId == _LIST_ID
 }
 
 @unsafe
 let getBuiltinVariantName = variant => {
-  from WasmI32 use { (>>), (==) }
+  use WasmI32.{ (>>), (==) }
   let typeId = WasmI32.load(variant, 8n) >> 1n
   let variantId = WasmI32.load(variant, 12n) >> 1n
 
@@ -305,7 +300,7 @@ let getBuiltinVariantName = variant => {
 }
 @unsafe
 let findTypeMetadata = typeHash => {
-  from WasmI32 use { remS as (%), (+), (<<), (<), (==) }
+  use WasmI32.{ remS as (%), (+), (<<), (<), (==) }
   let typeMetadata = typeMetadata()
   let numBuckets = WasmI32.load(typeMetadata, 0n)
   let hashHash = typeHash % numBuckets
@@ -324,7 +319,7 @@ let findTypeMetadata = typeHash => {
 }
 @unsafe
 let getFieldArray = (fields, arity) => {
-  from WasmI32 use { (<), (+), (*) }
+  use WasmI32.{ (<), (+), (*) }
   let fieldArray = allocateArray(arity)
 
   let mut fieldOffset = 0n
@@ -343,7 +338,7 @@ let getFieldArray = (fields, arity) => {
 
 @unsafe
 let getVariantMetadata = variant => {
-  from WasmI32 use { (>>), (+), (<), (==) }
+  use WasmI32.{ (>>), (+), (<), (==) }
   let typeHash = WasmI32.load(variant, 4n) >> 1n
   let variantId = WasmI32.load(variant, 12n) >> 1n
 
@@ -367,7 +362,7 @@ let getVariantMetadata = variant => {
 
 @unsafe
 let getRecordFieldNames = record_ => {
-  from WasmI32 use { (>>), (+), (==) }
+  use WasmI32.{ (>>), (+), (==) }
   let typeHash = WasmI32.load(record_, 4n) >> 1n
   let arity = WasmI32.load(record_, 12n)
 
@@ -381,56 +376,56 @@ let getRecordFieldNames = record_ => {
 // Check Stack Types
 @unsafe
 let isSimpleNumber = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_NUMBER_TAG_MASK) ==
     Tags._GRAIN_NUMBER_TAG_TYPE
 }
 @unsafe
 let isPointer = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
     Tags._GRAIN_GENERIC_HEAP_TAG_TYPE
 }
 @unsafe
 let isConstantValue = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
     Tags._GRAIN_CONST_TAG_TYPE
 }
 @unsafe
 let isShortValue = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_TAG_MASK) ==
     Tags._GRAIN_SHORTVAL_TAG_TYPE
 }
 
 @unsafe
 let isChar = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
     Tags._GRAIN_CHAR_SHORTVAL_TAG
 }
 @unsafe
 let isInt8 = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
     Tags._GRAIN_INT8_TAG_MASK
 }
 @unsafe
 let isInt16 = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
     Tags._GRAIN_INT16_TAG_MASK
 }
 @unsafe
 let isUInt8 = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
     Tags._GRAIN_UINT8_TAG_MASK
 }
 @unsafe
 let isUInt16 = a => {
-  from WasmI32 use { (&), (==) }
+  use WasmI32.{ (&), (==) }
   (WasmI32.fromGrain(a) & Tags._GRAIN_GENERIC_SHORTVAL_TAG_MASK) ==
     Tags._GRAIN_UINT16_TAG_MASK
 }
@@ -464,7 +459,7 @@ let stringifyVoid = (printBuf, printSettings) =>
   writeString("void", printBuf, printSettings, defaultPrintColors.voidColor)
 @unsafe
 let stringifyConstantValue = (const, printBuf, printSettings) => {
-  from WasmI32 use { (==) }
+  use WasmI32.{ (==) }
   match (WasmI32.fromGrain(const)) {
     t when t == WasmI32.fromGrain(true) =>
       stringifyBool(magic(const): Bool, printBuf, printSettings),
@@ -479,16 +474,17 @@ let stringifyConstantValue = (const, printBuf, printSettings) => {
 let stringifyChar = (char: Char, depth, printBuf, printSettings) => {
   if (depth == 0)
     writeChar(char, printBuf, printSettings, defaultPrintColors.charColor)
-  else writeEscapedChar(
-    char,
-    printBuf,
-    printSettings,
-    defaultPrintColors.charColor
-  )
+  else
+    writeEscapedChar(
+      char,
+      printBuf,
+      printSettings,
+      defaultPrintColors.charColor
+    )
 }
 @unsafe
 let stringifyInt8 = (int8: Int8, printBuf, printSettings) => {
-  from WasmI32 use { (>>) }
+  use WasmI32.{ (>>) }
   let radix = getRadixIndex(printSettings.radix)
   let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(int8) >> 8n
@@ -505,7 +501,7 @@ let stringifyInt8 = (int8: Int8, printBuf, printSettings) => {
 }
 @unsafe
 let stringifyInt16 = (int16: Int16, printBuf, printSettings) => {
-  from WasmI32 use { (>>) }
+  use WasmI32.{ (>>) }
   let radix = getRadixIndex(printSettings.radix)
   let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(int16) >> 8n
@@ -522,7 +518,7 @@ let stringifyInt16 = (int16: Int16, printBuf, printSettings) => {
 }
 @unsafe
 let stringifyUInt8 = (uint8: Uint8, printBuf, printSettings) => {
-  from WasmI32 use { (>>) }
+  use WasmI32.{ (>>) }
   let radix = getRadixIndex(printSettings.radix)
   let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(uint8) >> 8n
@@ -539,7 +535,7 @@ let stringifyUInt8 = (uint8: Uint8, printBuf, printSettings) => {
 }
 @unsafe
 let stringifyUInt16 = (uint16: Uint16, printBuf, printSettings) => {
-  from WasmI32 use { (>>) }
+  use WasmI32.{ (>>) }
   let radix = getRadixIndex(printSettings.radix)
   let radix = untagSimpleNumber(radix)
   let val = WasmI32.fromGrain(uint16) >> 8n
@@ -577,7 +573,7 @@ let stringifyNumber = (num: Number, printBuf, printSettings) => {
   let radix = getRadixIndex(printSettings.radix)
   let radix = untagSimpleNumber(radix)
   let radixPrefix = getRadixPrefix(printSettings.radix)
-  from WasmI32 use { (>>), (==) }
+  use WasmI32.{ (>>), (==) }
   // Check If Simple Number
   if (isSimpleNumber(num)) {
     let val = WasmI32.fromGrain(num) >> 1n
@@ -652,12 +648,13 @@ let stringifyNumber = (num: Number, printBuf, printSettings) => {
 let stringifyString = (str: String, depth, printBuf, printSettings) => {
   if (depth == 0)
     writeString(str, printBuf, printSettings, defaultPrintColors.stringColor)
-  else writeEscapedString(
-    str,
-    printBuf,
-    printSettings,
-    defaultPrintColors.stringColor
-  )
+  else
+    writeEscapedString(
+      str,
+      printBuf,
+      printSettings,
+      defaultPrintColors.stringColor
+    )
 }
 let stringifyLambda = (lambda, printBuf, printSettings) => {
   writeString(
@@ -669,7 +666,7 @@ let stringifyLambda = (lambda, printBuf, printSettings) => {
 }
 @unsafe
 let stringifyBytes = (bytes: Bytes, printBuf, printSettings) => {
-  from WasmI32 use { (>>) }
+  use WasmI32.{ (>>) }
   writeString(
     "<bytes: ",
     printBuf,
@@ -733,16 +730,15 @@ let stringifyUInt64 = (uint64: Uint64, printBuf, printSettings) => {
     writeString("uL", printBuf, printSettings, defaultPrintColors.numberColor)
 }
 @unsafe
-let rec stringifyTupleHelp =
-  (
-    tupValues,
-    addNewLines,
-    depth,
-    bracketColor,
-    printBuf,
-    printSettings,
-    allowBox=true,
-  ) => {
+let rec stringifyTupleHelp = (
+  tupValues,
+  addNewLines,
+  depth,
+  bracketColor,
+  printBuf,
+  printSettings,
+  allowBox=true,
+) => {
   // Write Start
   if (List.length(tupValues) == 1 && allowBox)
     writeString("box", printBuf, printSettings, defaultPrintColors.boxColor)
@@ -772,7 +768,7 @@ let rec stringifyTupleHelp =
   writeBracket(')', printBuf, printSettings, bracketCol)
 }
 and stringifyTuple = (tup, depth, bracketColor, printBuf, printSettings) => {
-  from WasmI32 use { (==), (<), (*), (-), (+) }
+  use WasmI32.{ (==), (<), (*), (-), (+) }
   let ptr = WasmI32.fromGrain(tup)
   let tupleLength = WasmI32.load(ptr, 4n)
   // Get Fields
@@ -782,7 +778,7 @@ and stringifyTuple = (tup, depth, bracketColor, printBuf, printSettings) => {
     fields = [magic(val), ...fields]
   }
   let fields = List.reverse(fields)
-  from Pervasives use { (+) }
+  use Pervasives.{ (+) }
   // Determine If We Need A NewLine
   let addNewLines = match (printSettings.newLineTuple) {
     _ when printSettings.forceNewLine => true,
@@ -813,14 +809,13 @@ and stringifyTuple = (tup, depth, bracketColor, printBuf, printSettings) => {
     printSettings
   )
 }
-and stringifyList =
-  (
-    list: List<a>,
-    depth,
-    bracketColor,
-    printBuf,
-    printSettings,
-  ) => {
+and stringifyList = (
+  list: List<a>,
+  depth,
+  bracketColor,
+  printBuf,
+  printSettings,
+) => {
   let addNewLines = match (printSettings.newLineList) {
     _ when printSettings.forceNewLine => true,
     Some(n) => {
@@ -866,14 +861,13 @@ and stringifyList =
   if (addNewLines) writeIndent(depth, printBuf, printSettings)
   writeBracket(']', printBuf, printSettings, bracketCol)
 }
-and stringifyArray =
-  (
-    arr: Array<a>,
-    depth,
-    bracketColor,
-    printBuf,
-    printSettings,
-  ) => {
+and stringifyArray = (
+  arr: Array<a>,
+  depth,
+  bracketColor,
+  printBuf,
+  printSettings,
+) => {
   let addNewLines = match (printSettings.newLineArray) {
     _ when printSettings.forceNewLine => true,
     Some(n) => {
@@ -934,16 +928,15 @@ and stringifyArray =
   if (addNewLines) writeIndent(depth, printBuf, printSettings)
   writeBracket(']', printBuf, printSettings, bracketCol)
 }
-and tupleAdtHelp =
-  (
-    ptr,
-    variantName,
-    depth,
-    bracketColor,
-    printBuf,
-    printSettings,
-  ) => {
-  from WasmI32 use { (==), (>), (*), (-), (>=), (+) }
+and tupleAdtHelp = (
+  ptr,
+  variantName,
+  depth,
+  bracketColor,
+  printBuf,
+  printSettings,
+) => {
+  use WasmI32.{ (==), (>), (*), (-), (>=), (+) }
   let variantArity = WasmI32.load(ptr, 16n)
   // Write Name
   writeString(variantName, printBuf, printSettings, defaultPrintColors.adtColor)
@@ -955,7 +948,7 @@ and tupleAdtHelp =
       values = [magic(WasmI32.load(ptr + i, 20n)), ...values]
     }
     // Call To Our Tuple Helper
-    from Pervasives use { (+), (>=) }
+    use Pervasives.{ (+), (>=) }
     // Determine If We Need A NewLine
     let addNewLines = match (printSettings.newLineTuple) {
       _ when printSettings.forceNewLine => true,
@@ -992,7 +985,7 @@ and tupleAdtHelp =
   }
 }
 and stringifyAdt = (adt, depth, bracketColor, printBuf, printSettings) => {
-  from WasmI32 use { (!=) }
+  use WasmI32.{ (!=) }
   let ptr = WasmI32.fromGrain(adt)
   let builtinVariantName = getBuiltinVariantName(ptr)
   if (builtinVariantName != -1n) {
@@ -1010,7 +1003,7 @@ and stringifyAdt = (adt, depth, bracketColor, printBuf, printSettings) => {
     stringifyList(magic(adt), depth, bracketColor, printBuf, printSettings)
   } else {
     let variantPtr = getVariantMetadata(ptr)
-    from WasmI32 use { (==), (+) }
+    use WasmI32.{ (==), (+) }
     if (variantPtr == -1n) {
       writeString(
         "<enum value>",
@@ -1029,7 +1022,7 @@ and stringifyAdt = (adt, depth, bracketColor, printBuf, printSettings) => {
       if (isRecordVariant) {
         // Make Array of Values
         let mut values = []
-        from WasmI32 use { (<), (*), (-), (+) }
+        use WasmI32.{ (<), (*), (-), (+) }
         // TODO: This is a multi-data type array, really consider how gross this is and unsafe this is
         let fields = variantPtr + distToRecordFields
         let recordArity = WasmI32.load(ptr, 16n)
@@ -1092,16 +1085,15 @@ and stringifyAdt = (adt, depth, bracketColor, printBuf, printSettings) => {
     }
   }
 }
-and stringifyRecordHelp =
-  (
-    fields: Array<String>,
-    values: Array<a>,
-    depth,
-    bracketColor,
-    splitLines,
-    printBuf,
-    printSettings,
-  ) => {
+and stringifyRecordHelp = (
+  fields: Array<String>,
+  values: Array<a>,
+  depth,
+  bracketColor,
+  splitLines,
+  printBuf,
+  printSettings,
+) => {
   // Write Open
   let bracketCol = defaultRainBowColorList[bracketColor]
   let bracketColor = incrBracketColor(bracketColor)
@@ -1138,7 +1130,7 @@ and stringifyRecordHelp =
   writeBracket('}', printBuf, printSettings, bracketCol)
 }
 and stringifyRecord = (item, depth, bracketColor, printBuf, printSettings) => {
-  from WasmI32 use { (==) }
+  use WasmI32.{ (==) }
   let ptr = WasmI32.fromGrain(item)
   let recordArity = WasmI32.load(ptr, 12n)
   let fieldsRaw = getRecordFieldNames(ptr)
@@ -1152,7 +1144,7 @@ and stringifyRecord = (item, depth, bracketColor, printBuf, printSettings) => {
   } else {
     // Make Array of Values
     let mut values = []
-    from WasmI32 use { (<), (*), (-), (+) }
+    use WasmI32.{ (<), (*), (-), (+) }
     // TODO: This is a multi-data type array, really consider how gross this is and unsafe this is
     for (let mut i = 0n; i < recordArity * 4n - 3n; i += 4n) {
       let fieldValue = WasmI32.load(ptr + i, 16n)
@@ -1195,15 +1187,8 @@ and stringifyRecord = (item, depth, bracketColor, printBuf, printSettings) => {
     )
   }
 }
-and stringifyHeapValue =
-  (
-    item,
-    depth,
-    bracketColor,
-    printBuf,
-    printSettings,
-  ) => {
-  from WasmI32 use { (==) }
+and stringifyHeapValue = (item, depth, bracketColor, printBuf, printSettings) => {
+  use WasmI32.{ (==) }
   let ptr = WasmI32.fromGrain(item)
   let tag = WasmI32.load(ptr, 0n)
   match (tag) {
@@ -1240,15 +1225,14 @@ and stringifyHeapValue =
     _ => stringifyUnknown("unknown heap value", printBuf, printSettings),
   }
 }
-and stringifyItem =
-  (
-    item,
-    depth,
-    bracketColor,
-    lastNewLine,
-    printBuf,
-    printSettings,
-  ) => {
+and stringifyItem = (
+  item,
+  depth,
+  bracketColor,
+  lastNewLine,
+  printBuf,
+  printSettings,
+) => {
   if (lastNewLine) writeIndent(depth, printBuf, printSettings)
   // Match The Item
   match (item) {

@@ -1,2 +1,3 @@
 *.gr.wasm
 *.temp.gr
+.DS_Store
